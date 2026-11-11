@@ -1,0 +1,6 @@
+{
+  "name": "nadi agentfeed",
+  "description": "Server data pasar + Agent Bridge untuk agent OMP: charting, data pasar Tokocrypto, jalur order riil/simulasi, dan portofolio. Eksekusi serta perhitungan trading diserahkan ke agent.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,140 @@
+name: Unit Tests (Manual)
+
+# Hanya dijalankan manual: tab Actions → "Unit Tests (Manual)" → Run workflow.
+# Tidak ada trigger push / pull_request.
+#
+# Arsip data/ dan docs/ sudah dihapus (2026-11-08): seluruh unit test kini murni
+# JVM tanpa dataset CSV/JSON eksternal. Engine tetap diuji karena memasok candle
+# dan indikator ke chart; ia bukan pengambil keputusan trading.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Cakupan test'
+        type: choice
+        default: all-unit-tests
+        options:
+          - bridge           # agu.analys.bridge.* → kontrak Agent Bridge V3
+          - engine           # agu.analys.engine.* → candle/indikator untuk chart
+          - config           # agu.analys.config.* → FeeSchedule dll.
+          - all-unit-tests   # semua unit test di app/
+          - custom           # pakai kolom custom_filter
+      custom_filter:
+        description: 'Khusus scope=custom. Pola Gradle --tests, pisahkan koma. Contoh: agu.analys.bridge.AgentBridgeTest'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Run unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cek teks Markdown (UTF-8, LF, tanpa CJK/mojibake)
+        run: python3 tools/check_md_text.py
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Siapkan Android SDK 36
+        uses: ./.github/actions/android-sdk
+
+      - name: Build test filter
+        id: filter
+        shell: bash
+        env:
+          SCOPE: ${{ inputs.scope }}
+          CUSTOM_FILTER: ${{ inputs.custom_filter }}
+        run: |
+          case "$SCOPE" in
+            bridge)
+              PATTERNS="agu.analys.bridge.*" ;;
+            engine)
+              PATTERNS="agu.analys.engine.*" ;;
+            config)
+              PATTERNS="agu.analys.config.*" ;;
+            all-unit-tests)
+              PATTERNS="" ;;
+            custom)
+              PATTERNS="$CUSTOM_FILTER"
+              if [ -z "$PATTERNS" ]; then
+                echo "::error::scope=custom membutuhkan custom_filter."
+                exit 1
+              fi ;;
+            *)
+              echo "::error::scope tidak dikenal: $SCOPE"
+              exit 1 ;;
+          esac
+
+          ARGS=""
+          IFS=',' read -ra ITEMS <<< "$PATTERNS"
+          for p in "${ITEMS[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [ -n "$p" ] && ARGS="$ARGS --tests \"$p\""
+          done
+
+          echo "patterns=${PATTERNS:-<semua>}" >> "$GITHUB_OUTPUT"
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "Scope   : $SCOPE"
+          echo "Filter  : ${PATTERNS:-<semua>}"
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          eval ./gradlew :app:testDebugUnitTest ${{ steps.filter.outputs.args }} --stacktrace --console=plain
+
+      - name: Test summary
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          total = fail = err = skip = 0
+          failed = []
+          for f in glob.glob("app/build/test-results/testDebugUnitTest/*.xml"):
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0)); fail += int(r.get("failures", 0))
+              err += int(r.get("errors", 0)); skip += int(r.get("skipped", 0))
+              for tc in r.iter("testcase"):
+                  if tc.find("failure") is not None or tc.find("error") is not None:
+                      failed.append(f'{tc.get("classname")}.{tc.get("name")}')
+          print("## Hasil Unit Test")
+          print(f"- Cakupan: `${{ steps.filter.outputs.patterns }}`")
+          print(f"- Total: **{total}** · Gagal: **{fail + err}** · Dilewati: **{skip}**")
+          if failed:
+              print("\n### Test gagal")
+              for t in failed:
+                  print(f"- `{t}`")
+          elif total == 0:
+              print("\nTidak ada test yang dijalankan (cek filter).")
+          PY
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14

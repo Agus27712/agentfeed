@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Hemat konteks (2026-10-27): tool konsol workspace — kelola member, provider, model,
+  // billing — tidak dipakai saat kerja kode di repo ini. Server tetap tersambung, hanya
+  // tool-nya yang disembunyikan dari model; menurut dokumentasi V2, instruksi sebuah
+  // server ikut dihilangkan bila seluruh tool-nya ditolak, sehingga katalognya tidak
+  // memakan jendela konteks.
+  //
+  // `context-mode` (ctx_*) dan `mem0` sengaja TETAP aktif: keduanya dipakai alur kerja
+  // di AGENTS.md global (analisis data besar + pencarian memori di awal sesi).
+  "permissions": [
+    {
+      "action": "opencode_console_*",
+      "resource": "*",
+      "effect": "deny"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.env
+debug.keystore
+*.jks
+*.keystore
+.build-outputs/
+audit/
+__pycache__/
+*.pyc
+# Arsip riset (data/ dan docs/) dihapus 2026-11-08; jangan dibuat ulang di repo.
+/data/
+/docs/
+*.vscode
+# Proyek smoke bridge (dibersihkan workflow, tapi jangan sampai ter-commit)
+tools/bridge-smoke/build/
+tools/bridge-smoke/.gradle/
+
+# Artefak internal AI Studio & lampiran aset sementara
+.aistudio/
+/.aistudio/
+/public/assets/
+public/assets/
+
+# Patch, diff, dan berkas cadangan (backup)
+*.patch
+*.patch.*
+*.diff
+*.bak
+*.orig
+

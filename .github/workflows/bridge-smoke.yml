@@ -1,0 +1,95 @@
+name: Bridge Smoke V3
+
+# Dua bukti untuk Agent Bridge V3 (protokol 2026-11-08):
+# 1. build rilis ber-R8 benar-benar menghasilkan APK, dan Netty tidak ikut di classpath;
+# 2. server bridge dijalankan dari sumber asli `AgentHttpServer.kt` di JVM, lalu diuji
+#    HTTP, 8 endpoint data pasar, gerbang token 401, WebSocket, SSE, dan restart.
+#
+# Dijalankan manual (workflow_dispatch). Catatan insiden lama: 41776980356 sempat
+# GAGAL karena `NoSuchMethodError: LockFreeLinkedListHead.addLast` (Ktor 2.3.9 +
+# kotlinx-coroutines 1.10.2). Karena itu smoke membaca versi dependensi langsung dari
+# gradle/libs.versions.toml, bukan versi duplikat.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-r8:
+    name: Build rilis (bukti R8) dan cek dependensi
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Siapkan Android SDK 36
+        uses: ./.github/actions/android-sdk
+
+      # Keystore opsional; fallback debug key ada di app/build.gradle.kts.
+      # Jangan gagalkan bukti R8 hanya karena secret tidak diatur.
+      - name: Build rilis APK (bukti R8)
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --console=plain
+
+      - name: Cek APK rilis benar-benar terbentuk
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          test -n "$APK" && test -f "$APK"
+          ls -l "$APK"
+
+      - name: Cek Netty sudah tidak ada di classpath rilis
+        run: |
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --console=plain > "$RUNNER_TEMP/deps.txt"
+          if grep -i 'netty' "$RUNNER_TEMP/deps.txt"; then
+            echo "::error::Netty masih ada di releaseRuntimeClasspath"
+            exit 1
+          fi
+          echo "Netty tidak ada di releaseRuntimeClasspath."
+          grep -i 'ktor-server-cio' "$RUNNER_TEMP/deps.txt"
+
+  bridge-smoke:
+    name: Smoke server bridge nyata (data pasar, HTTP, WebSocket, SSE, restart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.14 untuk proyek smoke
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Jalankan smoke dengan sumber AgentHttpServer.kt asli
+        working-directory: tools/bridge-smoke
+        run: gradle run --no-daemon --stacktrace --console=plain
+
+      - name: Bersihkan hasil build smoke
+        if: always()
+        run: rm -rf tools/bridge-smoke/build tools/bridge-smoke/.gradle

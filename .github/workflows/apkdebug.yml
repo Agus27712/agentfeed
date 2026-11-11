@@ -1,0 +1,119 @@
+name: APK Debug
+
+# Workflow manual untuk menghasilkan APK yang LANGSUNG BISA DIPASANG.
+# Tidak bergantung pada GitHub Secrets: build debug memakai debug key bawaan AGP,
+# dan build release memakai fallback yang sama bila keystore rilis tidak ada.
+# Ini menggantikan aturan lama yang menggagalkan build saat
+# RELEASE_KEYSTORE_BASE64 kosong (lihat app/build.gradle.kts).
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Jenis APK yang dibangun'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+          - both
+      run_unit_tests:
+        description: 'Jalankan tes unit sebelum build'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apk-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build APK ${{ inputs.build_type }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Siapkan Android SDK 36
+        uses: ./.github/actions/android-sdk
+
+      - name: Cek teks Markdown
+        run: python3 tools/check_md_text.py
+
+      - name: Tes unit (opsional)
+        if: ${{ inputs.run_unit_tests }}
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
+
+      # Secret diteruskan apa adanya. build.gradle.kts yang memutuskan: lengkap ->
+      # tanda tangan rilis; kosong -> debug key bawaan AGP. Jangan pernah exit 1
+      # hanya karena secret tidak diatur.
+      - name: Build APK
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          case "${{ inputs.build_type }}" in
+            debug)
+              GRADLE_TASKS=":app:assembleDebug" ;;
+            release)
+              GRADLE_TASKS=":app:assembleRelease" ;;
+            both)
+              GRADLE_TASKS=":app:assembleDebug :app:assembleRelease" ;;
+            *)
+              echo "::error::build_type tidak dikenal: ${{ inputs.build_type }}"
+              exit 1 ;;
+          esac
+          ./gradlew $GRADLE_TASKS --no-daemon --stacktrace --console=plain
+
+      - name: Kumpulkan APK
+        id: collect
+        shell: bash
+        run: |
+          mkdir -p apk-artifacts
+          find app/build/outputs/apk -type f -name '*.apk' -exec cp {} apk-artifacts/ \;
+          ls -lh apk-artifacts/
+          COUNT=$(find apk-artifacts -name '*.apk' | wc -l)
+          echo "Jumlah APK: $COUNT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          test "$COUNT" -ge 1
+
+      # Bukti bahwa APK benar-benar valid dan bertanda tangan, bukan sekadar ada.
+      - name: Verifikasi APK dan tanda tangan
+        shell: bash
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort | tail -n 1)
+          for f in apk-artifacts/*.apk; do
+            echo "== $f =="
+            unzip -t "$f" | tail -n 1
+            if [ -n "$APKSIGNER" ]; then
+              "$APKSIGNER" verify --print-certs "$f" | head -n 4
+            else
+              echo "apksigner tidak ditemukan; lewati verifikasi tanda tangan"
+            fi
+          done
+
+      - name: Unggah artifact APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nadi-agentfeed-${{ inputs.build_type }}-run${{ github.run_number }}
+          path: apk-artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 14

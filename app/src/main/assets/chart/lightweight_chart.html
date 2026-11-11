@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8"/>
+  <!--
+    Zoom halaman sengaja dimatikan, TAPI pinch/scroll chart TIDAK ikut mati:
+    Lightweight Charts menangani sendiri gesture lewat touch events. Yang penting
+    adalah `touch-action: none` pada #chart supaya WebView tidak mengambil alih
+    gesture pinch/drag sebelum sampai ke library.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0B0E14;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+    #chart {
+      width: 100%; height: 100%;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+  <!-- Lightweight Charts 5.2.1 (Apache-2.0), di-bundle lokal: tidak butuh CDN -->
+  <script src="lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div id="chart"></div>
+  <script>
+    let chart, candleSeries, volumeSeries;
+    let emaSeries, bbUpper, bbLower, bbMiddle;
+    let stochK, stochD;
+    let ready = false;
+    let currentRaw = [];
+    let priceLines = [];
+    let currentConfig = { volume: true, ema: false, bb: false, stoch: false };
+    let currentPrecision = 2;
+    let lastIndicatorMs = 0;
+
+    // Laporkan error ke Android (Logcat). Tanpa ini error JS hilang diam-diam.
+    function report(where, err) {
+      try {
+        if (window.ChartBridge && ChartBridge.onError) {
+          ChartBridge.onError(where + ': ' + ((err && err.message) ? err.message : String(err)));
+        }
+      } catch (_) {}
+    }
+    window.addEventListener('error', (e) => report('js', e.error || e.message));
+
+    function init() {
+      try {
+        const el = document.getElementById('chart');
+        chart = LightweightCharts.createChart(el, {
+          layout: {
+            background: { type: 'solid', color: '#0B0E14' },
+            textColor: '#9AA4B2',
+            fontSize: 12,
+            fontFamily: "'Roboto Mono', 'SFMono-Regular', Consolas, monospace",
+            attributionLogo: false
+          },
+          grid: {
+            vertLines: { color: 'rgba(255,255,255,0.07)' },
+            horzLines: { color: 'rgba(255,255,255,0.07)' }
+          },
+          crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: {
+              color: 'rgba(154,164,178,0.45)', width: 1,
+              style: LightweightCharts.LineStyle.Dashed,
+              labelBackgroundColor: '#1B2430'
+            },
+            horzLine: {
+              color: 'rgba(154,164,178,0.45)', width: 1,
+              style: LightweightCharts.LineStyle.Dashed,
+              labelBackgroundColor: '#1B2430'
+            }
+          },
+          rightPriceScale: {
+            borderColor: 'rgba(255,255,255,0.12)',
+            scaleMargins: { top: 0.12, bottom: 0.12 }
+          },
+          timeScale: {
+            borderColor: 'rgba(255,255,255,0.12)',
+            timeVisible: true,
+            secondsVisible: false,
+            rightOffset: 8,
+            barSpacing: 9,
+            minBarSpacing: 2,
+            fixLeftEdge: false,
+            lockVisibleTimeRangeOnResize: true
+          },
+          // Dua blok ini yang memulihkan scroll & pinch. Sebelumnya hanya
+          // `handleScroll.vertTouchDrag` yang diset, jadi gesture horizontal
+          // dan pinch bergantung default yang tertimpa viewport WebView.
+          handleScroll: {
+            mouseWheel: true,
+            pressedMouseMove: true,
+            horzTouchDrag: true,
+            vertTouchDrag: false
+          },
+          handleScale: {
+            axisPressedMouseMove: { time: true, price: false },
+            axisDoubleClickReset: true,
+            mouseWheel: true,
+            pinch: true
+          },
+          localization: {
+            priceFormatter: (p) => formatPrice(p),
+            timeFormatter: undefined
+          }
+        });
+
+        // v5: series dibuat lewat chart.addSeries(definisi, opsi)
+        candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+          upColor: '#26a69a', downColor: '#ef5350',
+          borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+          wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+          priceLineColor: '#4DA3FF',
+          priceLineStyle: LightweightCharts.LineStyle.Dotted,
+          lastValueVisible: true
+        });
+
+        volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+          priceFormat: { type: 'volume' },
+          priceScaleId: '',
+          lastValueVisible: false,
+          priceLineVisible: false
+        });
+        volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+        emaSeries = chart.addSeries(LightweightCharts.LineSeries, { color: '#f6c343', lineWidth: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
+        bbUpper = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(0, 188, 212, 0.6)', lineWidth: 1, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
+        bbMiddle = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(0, 188, 212, 0.9)', lineWidth: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
+        bbLower = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(0, 188, 212, 0.6)', lineWidth: 1, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
+
+        stochK = chart.addSeries(LightweightCharts.LineSeries, { color: '#00E5FF', lineWidth: 1, priceScaleId: 'stoch', lastValueVisible: false, priceLineVisible: false });
+        stochD = chart.addSeries(LightweightCharts.LineSeries, { color: '#FF9800', lineWidth: 1, priceScaleId: 'stoch', lastValueVisible: false, priceLineVisible: false });
+        chart.priceScale('stoch').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+
+        ready = true;
+        resizeChart();
+        if (typeof ResizeObserver !== 'undefined') {
+          new ResizeObserver(() => resizeChart()).observe(el);
+        }
+        window.addEventListener('resize', resizeChart);
+        window.addEventListener('orientationchange', () => setTimeout(resizeChart, 120));
+      } catch (e) { report('init', e); }
+    }
+
+    // Ukuran diambil dari container, bukan ditebak. `lockVisibleTimeRangeOnResize`
+    // menjaga posisi scroll saat rotasi / keyboard berubah.
+    function resizeChart() {
+      if (!ready || !chart) return;
+      try {
+        const el = document.getElementById('chart');
+        const w = el.clientWidth, h = el.clientHeight;
+        if (w > 0 && h > 0) chart.applyOptions({ width: w, height: h });
+      } catch (e) { report('resize', e); }
+    }
+
+    function formatPrice(p) {
+      if (!isFinite(p)) return '';
+      try {
+        return Number(p).toLocaleString('en-US', {
+          minimumFractionDigits: currentPrecision,
+          maximumFractionDigits: currentPrecision
+        });
+      } catch (_) { return Number(p).toFixed(currentPrecision); }
+    }
+
+    // Presisi mengikuti harga terakhir: koin murah (PEPE, SHIB) butuh banyak
+    // desimal, BTC/IDR cukup 0-2. Tanpa ini label harga jadi "0.00" atau
+    // "1700000000.00000000" — salah satu alasan chart terasa tidak proper.
+    function applyPriceFormat(price) {
+      let precision = 2, minMove = 0.01;
+      if (price > 0) {
+        if (price < 0.0001) { precision = 8; minMove = 0.00000001; }
+        else if (price < 0.01) { precision = 6; minMove = 0.000001; }
+        else if (price < 1) { precision = 4; minMove = 0.0001; }
+        else if (price < 100) { precision = 3; minMove = 0.001; }
+        else if (price < 10000) { precision = 2; minMove = 0.01; }
+        else { precision = 0; minMove = 1; }
+      }
+      currentPrecision = precision;
+      const pf = { type: 'price', precision: precision, minMove: minMove };
+      try {
+        candleSeries.applyOptions({ priceFormat: pf });
+        emaSeries.applyOptions({ priceFormat: pf });
+        bbUpper.applyOptions({ priceFormat: pf });
+        bbMiddle.applyOptions({ priceFormat: pf });
+        bbLower.applyOptions({ priceFormat: pf });
+      } catch (e) { report('priceFormat', e); }
+    }
+
+    function normalizeTime(t) {
+      const n = Number(t);
+      if (!n || isNaN(n)) return 0;
+      return n > 10000000000 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+
+    function toCandle(c) {
+      return { time: c.t, open: c.o, high: c.h, low: c.l, close: c.c };
+    }
+    function toVolume(c) {
+      return {
+        time: c.t, value: c.v,
+        color: c.c >= c.o ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)'
+      };
+    }
+
+    // Indikator dihitung O(n) (prefix sum untuk BB), bukan O(n*periode)
+    // seperti sebelumnya — penting saat live tick memicu hitung ulang.
+    function calculateIndicators(data) {
+      if (!data || data.length === 0) return;
+      try {
+        const emaData = [], bbUp = [], bbMid = [], bbLow = [];
+        const stochKData = [], stochDData = [];
+        const n = data.length;
+        const emaPeriod = 20, bbPeriod = 20, rsiPeriod = 14, stochPeriod = 14;
+        const k = 2 / (emaPeriod + 1);
+
+        let ema = data[0].c;
+        for (let i = 0; i < n; i++) {
+          if (i > 0) ema = (data[i].c - ema) * k + ema;
+          emaData.push({ time: data[i].t, value: ema });
+        }
+
+        // BB: jumlah & jumlah kuadrat berjalan (prefix sum).
+        let sum = 0, sumSq = 0;
+        for (let i = 0; i < n; i++) {
+          const c = data[i].c;
+          sum += c; sumSq += c * c;
+          if (i >= bbPeriod) {
+            const out = data[i - bbPeriod].c;
+            sum -= out; sumSq -= out * out;
+          }
+          if (i >= bbPeriod - 1) {
+            const sma = sum / bbPeriod;
+            const variance = Math.max(0, sumSq / bbPeriod - sma * sma);
+            const sd = Math.sqrt(variance);
+            const t = data[i].t;
+            bbMid.push({ time: t, value: sma });
+            bbUp.push({ time: t, value: sma + 2 * sd });
+            bbLow.push({ time: t, value: sma - 2 * sd });
+          }
+        }
+
+        // RSI Wilder.
+        const rsiValues = new Array(n).fill(null);
+        if (n > rsiPeriod) {
+          let gains = 0, losses = 0;
+          for (let i = 1; i <= rsiPeriod; i++) {
+            const d = data[i].c - data[i - 1].c;
+            if (d >= 0) gains += d; else losses -= d;
+          }
+          let avgGain = gains / rsiPeriod, avgLoss = losses / rsiPeriod;
+          rsiValues[rsiPeriod] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+          for (let i = rsiPeriod + 1; i < n; i++) {
+            const d = data[i].c - data[i - 1].c;
+            const gain = Math.max(d, 0), loss = Math.max(-d, 0);
+            avgGain = (avgGain * (rsiPeriod - 1) + gain) / rsiPeriod;
+            avgLoss = (avgLoss * (rsiPeriod - 1) + loss) / rsiPeriod;
+            rsiValues[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+          }
+        }
+
+        // StochRSI: K = posisi RSI dalam jendela, lalu smoothing 3-3.
+        const kValues = new Array(n).fill(null);
+        for (let i = 0; i < n; i++) {
+          if (rsiValues[i] === null || i < rsiPeriod + stochPeriod - 1) continue;
+          let lo = Infinity, hi = -Infinity;
+          for (let j = i - stochPeriod + 1; j <= i; j++) {
+            if (rsiValues[j] === null) continue;
+            lo = Math.min(lo, rsiValues[j]); hi = Math.max(hi, rsiValues[j]);
+          }
+          kValues[i] = hi > lo ? 100 * (rsiValues[i] - lo) / (hi - lo) : 0;
+        }
+        const smoothK = new Array(n).fill(null);
+        for (let i = 0; i < n; i++) {
+          if (kValues[i] === null || i < 2 || kValues[i - 1] === null || kValues[i - 2] === null) continue;
+          smoothK[i] = (kValues[i] + kValues[i - 1] + kValues[i - 2]) / 3;
+          stochKData.push({ time: data[i].t, value: smoothK[i] });
+        }
+        for (let i = 0; i < n; i++) {
+          if (smoothK[i] === null || i < 2 || smoothK[i - 1] === null || smoothK[i - 2] === null) continue;
+          stochDData.push({ time: data[i].t, value: (smoothK[i] + smoothK[i - 1] + smoothK[i - 2]) / 3 });
+        }
+
+        emaSeries.setData(emaData);
+        bbUpper.setData(bbUp);
+        bbMiddle.setData(bbMid);
+        bbLower.setData(bbLow);
+        stochK.setData(stochKData);
+        stochD.setData(stochDData);
+      } catch (e) { report('calculateIndicators', e); }
+    }
+
+    function throttledIndicators() {
+      const now = Date.now();
+      if (now - lastIndicatorMs < 1200) return;
+      lastIndicatorMs = now;
+      calculateIndicators(currentRaw);
+    }
+
+    function applyVisibility() {
+      volumeSeries.applyOptions({ visible: currentConfig.volume });
+      emaSeries.applyOptions({ visible: currentConfig.ema });
+      bbUpper.applyOptions({ visible: currentConfig.bb });
+      bbMiddle.applyOptions({ visible: currentConfig.bb });
+      bbLower.applyOptions({ visible: currentConfig.bb });
+      stochK.applyOptions({ visible: currentConfig.stoch });
+      stochD.applyOptions({ visible: currentConfig.stoch });
+      chart.priceScale('stoch').applyOptions({ visible: currentConfig.stoch });
+
+      if (currentConfig.stoch) {
+        candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.25 } });
+        if (currentConfig.volume) {
+          volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0.25 } });
+        }
+        chart.priceScale('stoch').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      } else {
+        candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
+        if (currentConfig.volume) {
+          volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+        }
+      }
+    }
+
+    function setIndicators(configStr) {
+      try {
+        currentConfig = (typeof configStr === 'string') ? JSON.parse(configStr) : configStr;
+        applyVisibility();
+      } catch (e) { report('setIndicators', e); }
+    }
+
+    function safeVisibleRange() {
+      try {
+        const r = chart.timeScale().getVisibleLogicalRange();
+        return (r && isFinite(r.from) && isFinite(r.to)) ? { from: r.from, to: r.to } : null;
+      } catch (_) { return null; }
+    }
+
+    // Tampilkan ~60 candle terakhir. Hanya dipanggil saat data pertama masuk,
+    // saat pair/timeframe berganti, atau saat pengguna menekan "Fit".
+    function fitChart() {
+      if (!ready || currentRaw.length === 0) return;
+      try {
+        const total = currentRaw.length;
+        if (total > 60) chart.timeScale().setVisibleLogicalRange({ from: total - 60, to: total + 3 });
+        else chart.timeScale().fitContent();
+      } catch (e) { report('fitChart', e); }
+    }
+
+    /**
+     * PERBAIKAN UTAMA: data live TIDAK boleh memanggil setData() penuh.
+     *
+     * Sebelumnya setiap rekomposisi Compose / tick harga memanggil setCandles(),
+     * dan fungsi itu selalu `setData()` + `setVisibleLogicalRange()` — sehingga
+     * scroll & zoom pengguna di-reset berkali-kali per detik. Sekarang:
+     *   - dataset yang sama (candle bertambah / harga terakhir berubah) cukup
+     *     `series.update()` dan TIDAK pernah menyentuh visible range;
+     *   - `setData()` penuh hanya saat dataset benar-benar baru, dan range
+     *     pengguna dipulihkan setelahnya, kecuali `resetView=true`.
+     */
+    function setCandles(input, resetView) {
+      if (!ready) return;
+      try {
+        const raw = (typeof input === 'string') ? JSON.parse(input) : input;
+        if (!Array.isArray(raw) || raw.length === 0) return;
+
+        const byTime = new Map();
+        for (const c of raw) {
+          const t = normalizeTime(c.t);
+          if (!t || !(c.o > 0)) continue;
+          byTime.set(t, { t: t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v || 0 });
+        }
+        const sorted = Array.from(byTime.values()).sort((a, b) => a.t - b.t);
+        if (sorted.length === 0) return;
+
+        const prevFirst = currentRaw.length ? currentRaw[0].t : 0;
+        const prevLast = currentRaw.length ? currentRaw[currentRaw.length - 1].t : 0;
+        const sameDataset = currentRaw.length > 0 &&
+          sorted.length >= currentRaw.length &&
+          sorted[0].t === prevFirst;
+        const savedRange = resetView ? null : safeVisibleRange();
+
+        if (sameDataset && !resetView) {
+          // Update inkremental: candle lama tidak digambar ulang, range tidak diubah.
+          const start = Math.max(0, currentRaw.length - 1);
+          for (let i = start; i < sorted.length; i++) {
+            candleSeries.update(toCandle(sorted[i]));
+            volumeSeries.update(toVolume(sorted[i]));
+          }
+          currentRaw = sorted;
+          throttledIndicators();
+          applyVisibility();
+          return;
+        }
+
+        // Dataset baru (pair/timeframe ganti) atau reset eksplisit.
+        currentRaw = sorted;
+        candleSeries.setData(sorted.map(toCandle));
+        volumeSeries.setData(sorted.map(toVolume));
+        lastIndicatorMs = Date.now();
+        calculateIndicators(currentRaw);
+        applyVisibility();
+        applyPriceFormat(sorted[sorted.length - 1].c);
+
+        if (savedRange && !resetView) {
+          // Pertahankan posisi zoom/scroll pengguna walau series diganti.
+          chart.timeScale().setVisibleLogicalRange(savedRange);
+        } else {
+          fitChart();
+        }
+      } catch (e) { report('setCandles', e); }
+    }
+
+    // Tick harga live: update candle terakhir saja. Tidak pernah mengubah view.
+    function updateLast(jsonStr) {
+      if (!ready || currentRaw.length === 0) return;
+      try {
+        const c = (typeof jsonStr === 'string') ? JSON.parse(jsonStr) : jsonStr;
+        const t = normalizeTime(c.t);
+        if (!t || !(c.o > 0)) return;
+        const last = currentRaw[currentRaw.length - 1];
+        if (t < last.t) return;
+
+        candleSeries.update(toCandle({ t: t, o: c.o, h: c.h, l: c.l, c: c.c }));
+        volumeSeries.update(toVolume({ t: t, c: c.c, o: c.o, v: c.v || 0 }));
+
+        const normalized = { t: t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v || 0 };
+        if (last.t === t) currentRaw[currentRaw.length - 1] = normalized;
+        else currentRaw.push(normalized);
+        throttledIndicators();
+      } catch (e) { report('updateLast', e); }
+    }
+
+    function setLevels(input) {
+      if (!ready || !candleSeries) return;
+      try {
+        const lv = (typeof input === 'string') ? JSON.parse(input) : input;
+        priceLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch (_) {} });
+        priceLines = [];
+        const add = (price, color) => {
+          if (!price || price <= 0) return;
+          priceLines.push(candleSeries.createPriceLine({
+            price: price,
+            color: color,
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: ''
+          }));
+        };
+        add(lv.entry, '#00E5FF');
+        add(lv.tp1, '#26a69a');
+        add(lv.tp2, '#66BB6A');
+        add(lv.sl, '#ef5350');
+      } catch (e) { report('setLevels', e); }
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>

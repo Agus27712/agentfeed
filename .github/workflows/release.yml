@@ -1,0 +1,133 @@
+name: Release APK
+
+# Menerbitkan GitHub Release berisi APK. Untuk sekadar mendapatkan APK yang bisa
+# dipasang tanpa membuat rilis, pakai workflow `APK Debug` (apkdebug.yml).
+# Kedua workflow TIDAK membutuhkan keystore rilis: bila secret tidak ada,
+# app/build.gradle.kts memakai debug key bawaan AGP. Aturan lama yang mewajibkan
+# RELEASE_KEYSTORE_BASE64 (dan selalu gagal) dihapus 2026-11-11.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build APK and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Siapkan Android SDK 36
+        uses: ./.github/actions/android-sdk
+
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
+          VERSION_CODE=$(sed -n 's/.*getOrElse(\([0-9]*\)).*/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$VERSION_NAME" ]; then
+            VERSION_NAME="3.3.9"
+          fi
+          if [ -z "$VERSION_CODE" ]; then
+            VERSION_CODE="75"
+          fi
+          echo "Detected Version Name: $VERSION_NAME"
+          echo "Detected Version Code: $VERSION_CODE"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v${{ steps.version.outputs.name }}"
+          fi
+          echo "Resolved Tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Keystore rilis BERSIFAT OPSIONAL. Secret diteruskan apa adanya;
+      # app/build.gradle.kts yang memutuskan: lengkap -> tanda tangan rilis,
+      # kosong -> debug key bawaan AGP supaya APK tetap bisa dipasang.
+      # Jangan pernah gagalkan build hanya karena secret tidak diatur.
+      - name: Build release APK
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --console=plain
+
+      - name: Locate APK
+        id: locate_apk
+        shell: bash
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "::error::APK file not found in app/build/outputs/apk/release!"
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.name }}"
+          CODE="${{ steps.version.outputs.code }}"
+          TAG="${{ steps.release_tag.outputs.tag }}"
+
+          # Ambil tag remote untuk membandingkan
+          git fetch --tags --force origin 2>/dev/null || true
+
+          PREVIOUS_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+' | grep -v "^$TAG$" | head -n 1 || true)
+
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          
+          if [ -n "$PREVIOUS_TAG" ] && git rev-parse -q --verify "refs/tags/$PREVIOUS_TAG" >/dev/null 2>&1; then
+            # Buat link changelog antara 2 tag
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}" > "$NOTES_FILE"
+          else
+            # Fallback jika tidak ada tag sebelumnya
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/releases/tag/${TAG}" > "$NOTES_FILE"
+          fi
+          
+      - name: Create or update GitHub release and upload APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.name }}"
+          TAG="${{ steps.release_tag.outputs.tag }}"
+          APK="${{ steps.locate_apk.outputs.apk_path }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Updating existing release notes and asset..."
+            gh release edit "$TAG" --title "nadi agentfeed v$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" "$APK" --title "nadi agentfeed v$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --target "${GITHUB_SHA}"
+          fi
