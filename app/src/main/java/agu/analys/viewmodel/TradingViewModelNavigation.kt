@@ -17,10 +17,15 @@ fun TradingViewModel.navigateTo(screen: AppScreen) {
     }
 }
 
-/** Buka chart layar penuh untuk pair yang dipilih. Halaman detail koin sudah dihapus. */
-fun TradingViewModel.openChart(pair: TradingPair) {
+/** Buka layar detail koin dengan mini-chart dan rincian kalkulasi engine. */
+fun TradingViewModel.openCoinDetail(pair: TradingPair) {
     selectPair(pair)
-    navigateTo(AppScreen.LANDSCAPE_CHART)
+    navigateTo(AppScreen.COIN_DETAIL)
+}
+
+/** Pintu masuk saat pair diklik: ke detailcoin terlebih dahulu sebelum chart penuh. */
+fun TradingViewModel.openChart(pair: TradingPair) {
+    openCoinDetail(pair)
 }
 
 fun TradingViewModel.openSimulation(pair: TradingPair? = null) {

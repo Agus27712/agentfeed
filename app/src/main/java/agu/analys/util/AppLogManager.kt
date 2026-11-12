@@ -76,7 +76,7 @@ object AppLogManager {
                 timestamp = bootTime,
                 priority = Log.INFO,
                 tag = "SystemInit",
-                message = "nadi agentfeed v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) siap. Device: $deviceModel (Android $osVersion, SDK $sdkInt) | RAM: ${freeMemMb}MB free / ${totalMemMb}MB alloc / ${maxMemMb}MB max",
+                message = "omp agentfeed v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) siap. Device: $deviceModel (Android $osVersion, SDK $sdkInt) | RAM: ${freeMemMb}MB free / ${totalMemMb}MB alloc / ${maxMemMb}MB max",
                 category = LogCategory.SERVICE
             )
         )

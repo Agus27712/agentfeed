@@ -2,7 +2,11 @@ package agu.analys.bridge
 
 import android.content.Context
 import agu.analys.config.FeeSchedule
+import agu.analys.config.StrategyMode
+import agu.analys.config.TradingFeeConfig
 import agu.analys.data.TokocryptoSymbolRepository
+import agu.analys.engine.ModeSignalEvaluator
+import agu.analys.engine.ModeSignalInput
 import agu.analys.model.Timeframe
 import agu.analys.model.TokocryptoSymbolInfo
 import agu.analys.service.TokocryptoMarketService
@@ -54,6 +58,8 @@ object AgentMarketDataProvider {
         "GET /api/v1/market/depth?symbol=&limit=",
         "GET /api/v1/market/symbols?quote=&limit=",
         "GET /api/v1/market/context?symbol=&interval=&limit=",
+        "GET /api/v1/engine/analysis?symbol=",
+        "GET /api/v1/market/analysis?symbol=",
         "GET /signals/latest",
         "GET /signals/history?limit=",
         "GET /portfolio"
@@ -300,6 +306,7 @@ object AgentMarketDataProvider {
         val tickerJob = async { ticker(norm) }
         val klinesJob = async { klines(norm, interval, limit) }
         val depthJob = async { depth(norm, 20) }
+        val engineJob = async { engineAnalysis(ctx, norm) }
 
         val aturan = rules(norm)
         val biaya = runCatching { fees(quote) }.getOrNull()
@@ -318,6 +325,8 @@ object AgentMarketDataProvider {
         if (biaya == null) catatan += "Tarif fee tidak dapat dihitung; jangan kirim order sebelum fees tersedia."
         if (status?.isBridgeRunning != true) catatan += "Status bridge belum terkonfirmasi Running."
 
+        val anal = engineJob.await()
+
         AgentTradingContext(
             symbol = norm,
             ticker = tickerJob.await(),
@@ -328,8 +337,218 @@ object AgentMarketDataProvider {
             latestSignal = sinyal,
             portfolio = portofolio,
             tradingStatus = status,
+            engineAnalysis = anal,
             notes = catatan
         )
+    }
+
+    /**
+     * Analisis komprehensif multi-engine (Scalping, Intraday, Swing) beserta indikator teknikal
+     * nyata (RSI, MACD, EMA, ATR, RVOL, VWAP, Bollinger Bands) yang dihitung langsung oleh
+     * [ModeSignalEvaluator] bursa Tokocrypto.
+     */
+    suspend fun engineAnalysis(ctx: Context, symbol: String): AgentEngineAnalysis {
+        val parsed = normalize(symbol)
+            ?: return AgentEngineAnalysis(
+                symbol = symbol,
+                available = false,
+                error = invalidSymbol(symbol)
+            )
+        val (norm, quote) = parsed
+
+        return try {
+            coroutineScope {
+                val tickJob = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchTicker(norm) }
+                }
+                val h1Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.H1, 60) }.orEmpty()
+                }
+                val h4Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.H4, 60) }.orEmpty()
+                }
+                val d1Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.D1, 30) }.orEmpty()
+                }
+                val m15Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.M15, 60) }.orEmpty()
+                }
+                val m5Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.M5, 60) }.orEmpty()
+                }
+                val m1Job = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchCandles(norm, Timeframe.M1, 60) }.orEmpty()
+                }
+                val bookJob = async {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { TokocryptoMarketService.fetchOrderBook(norm, 20) }
+                }
+
+                val tick = tickJob.await()
+                val price = tick?.price ?: 0.0
+                if (price <= 0.0) {
+                    return@coroutineScope AgentEngineAnalysis(
+                        symbol = norm,
+                        available = false,
+                        error = "Ticker atau harga $norm belum tersedia dari bursa."
+                    )
+                }
+
+                val h1Candles = h1Job.await()
+                val h4Candles = h4Job.await()
+                val d1Candles = d1Job.await()
+                val m15Candles = m15Job.await()
+                val m5Candles = m5Job.await()
+                val m1Candles = m1Job.await()
+                val bookPair = bookJob.await()
+                val bids = bookPair?.first.orEmpty()
+                val asks = bookPair?.second.orEmpty()
+
+                val nowMs = System.currentTimeMillis()
+                val feeModel = FeeSchedule.configFor("TOKOCRYPTO", quote)
+
+                val baseInput = ModeSignalInput(
+                    mode = StrategyMode.SCALPING,
+                    symbol = norm,
+                    price = price,
+                    nowMs = nowMs,
+                    change24h = tick?.change24h ?: Double.NaN,
+                    h1Candles = if (h1Candles.size > 1) h1Candles.dropLast(1) else h1Candles,
+                    h4Candles = if (h4Candles.size > 1) h4Candles.dropLast(1) else h4Candles,
+                    d1Candles = d1Candles,
+                    m15Candles = m15Candles,
+                    m5Candles = m5Candles,
+                    m1Candles = m1Candles,
+                    bids = bids,
+                    asks = asks,
+                    fees = feeModel
+                )
+
+                val scalpResult = runCatching {
+                    ModeSignalEvaluator.evaluate(baseInput.copy(mode = StrategyMode.SCALPING))
+                }.getOrNull()
+
+                val intradayResult = runCatching {
+                    ModeSignalEvaluator.evaluate(baseInput.copy(mode = StrategyMode.OFFICE_DAILY))
+                }.getOrNull()
+
+                val swingResult = runCatching {
+                    ModeSignalEvaluator.evaluate(baseInput.copy(mode = StrategyMode.SWING))
+                }.getOrNull()
+
+                val activeIndicators = scalpResult?.indicators
+                    ?: intradayResult?.indicators
+                    ?: swingResult?.indicators
+
+                val techDto = activeIndicators?.let { ind ->
+                    AgentTechnicalIndicators(
+                        rsi14 = ind.rsi14.takeIf { !it.isNaN() },
+                        macd = ind.macd.takeIf { !it.isNaN() },
+                        macdSignal = ind.macdSignal.takeIf { !it.isNaN() },
+                        macdHist = ind.macdHist.takeIf { !it.isNaN() },
+                        ema20 = ind.ema20.takeIf { !it.isNaN() },
+                        ema50 = ind.ema50.takeIf { !it.isNaN() },
+                        ema200 = ind.ema200.takeIf { !it.isNaN() },
+                        bbUpper = ind.bbUpper.takeIf { !it.isNaN() },
+                        bbLower = ind.bbLower.takeIf { !it.isNaN() },
+                        atr = ind.atr.takeIf { !it.isNaN() },
+                        rvol = ind.rvol.takeIf { !it.isNaN() },
+                        vwap = ind.vwap.takeIf { !it.isNaN() }
+                    )
+                }
+
+                val scalpDto = scalpResult?.let { res ->
+                    val s = res.signal
+                    AgentScalpingAnalysis(
+                        action = s.action.name,
+                        stage = s.scalpingStage.displayName,
+                        confidence = s.confidence,
+                        setup = s.scalpingSetup.ifBlank { s.patternDetected.orEmpty() },
+                        score = s.scalpingScore,
+                        scoreCategory = s.scalpingScoreCategory,
+                        regime = s.scalpingRegime.ifBlank { s.regimeDetected },
+                        entryPrice = if (s.entryPrice > 0.0) s.entryPrice else price,
+                        entryZoneLow = s.entryZoneLow,
+                        entryZoneHigh = s.entryZoneHigh,
+                        tp1 = s.targetPrice1,
+                        tp2 = s.targetPrice2,
+                        sl = s.stopLoss,
+                        riskReward = s.riskRewardRatio,
+                        checkpoints = s.mtf.resolvedCheckpoints().map {
+                            AgentCheckpoint(
+                                code = it.code,
+                                label = it.label,
+                                isOk = it.isOk,
+                                metricValue = it.metricValue,
+                                detail = it.detail
+                            )
+                        },
+                        reasoning = s.reasoning
+                    )
+                }
+
+                val intradayDto = intradayResult?.let { res ->
+                    val s = res.signal
+                    AgentIntradayAnalysis(
+                        action = s.action.name,
+                        confidence = s.confidence,
+                        setup = s.patternDetected ?: "Intraday Momentum",
+                        session = "H4 / Daily Session",
+                        targetPrice = s.targetPrice1,
+                        stopLoss = s.stopLoss,
+                        riskReward = s.riskRewardRatio,
+                        reasoning = s.reasoning
+                    )
+                }
+
+                val swingDto = swingResult?.let { res ->
+                    val s = res.signal
+                    AgentSwingAnalysis(
+                        action = s.action.name,
+                        confidence = s.confidence,
+                        trend = s.sentiment.displayName,
+                        regime = s.regimeDetected,
+                        support = res.indicators.bbLower.takeIf { !it.isNaN() } ?: 0.0,
+                        resistance = res.indicators.bbUpper.takeIf { !it.isNaN() } ?: 0.0,
+                        targetPrice = s.targetPrice1,
+                        stopLoss = s.stopLoss,
+                        reasoning = s.reasoning
+                    )
+                }
+
+                val buys = (if (scalpDto?.action == "BUY") 1 else 0) +
+                    (if (intradayDto?.action == "BUY") 1 else 0) +
+                    (if (swingDto?.action == "BUY") 1 else 0)
+                val sells = (if (scalpDto?.action == "SELL") 1 else 0) +
+                    (if (intradayDto?.action == "SELL") 1 else 0) +
+                    (if (swingDto?.action == "SELL") 1 else 0)
+                val bias = when {
+                    buys >= 2 -> "BULLISH_CONFLUENCE"
+                    buys == 1 && sells == 0 -> "LEAN_BULLISH"
+                    sells >= 2 -> "BEARISH_CONFLUENCE"
+                    sells == 1 && buys == 0 -> "LEAN_BEARISH"
+                    else -> "NEUTRAL_MIXED"
+                }
+
+                AgentEngineAnalysis(
+                    symbol = norm,
+                    available = true,
+                    price = price,
+                    scalping = scalpDto,
+                    intraday = intradayDto,
+                    swing = swingDto,
+                    indicators = techDto,
+                    overallBias = bias,
+                    ts = nowMs
+                )
+            }
+        } catch (t: Throwable) {
+            logGagal("engineAnalysis", norm, t)
+            AgentEngineAnalysis(
+                symbol = norm,
+                available = false,
+                error = ringkas(t)
+            )
+        }
     }
 
     /** Sinyal terakhir: cache memori dulu, fallback ke `latest.json` di direktori output. */

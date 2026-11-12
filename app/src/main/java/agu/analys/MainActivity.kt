@@ -29,6 +29,7 @@ import androidx.lifecycle.ViewModelProvider
 import agu.analys.model.AppScreen
 import agu.analys.ui.animation.LocalPriceAnimationMode
 import agu.analys.ui.screens.DashboardScreen
+import agu.analys.ui.screens.DetailCoinScreen
 import agu.analys.ui.screens.LandscapeChartScreen
 import agu.analys.ui.screens.LearningPathScreen
 import agu.analys.ui.screens.PortfolioScreen
@@ -161,6 +162,12 @@ class MainActivity : ComponentActivity() {
                             viewModel = tradingViewModel,
                             onBack = { tradingViewModel.goBack() },
                             onOpenChart = { tradingViewModel.openChart(it) }
+                        )
+                        AppScreen.COIN_DETAIL -> DetailCoinScreen(
+                            viewModel = tradingViewModel,
+                            onOpenLandscapeChart = { tradingViewModel.openLandscapeChart() },
+                            onOpenSimulation = { tradingViewModel.openSimulation(it) },
+                            onBack = { tradingViewModel.goBack() }
                         )
                     }
                 }

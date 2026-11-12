@@ -710,7 +710,7 @@ fun DashboardScreen(
                 isFavorite = favorites.contains(pair.symbol),
                 onOpenFullChart = {
                     viewModel.selectPair(pair)
-                    onOpenChart(pair)
+                    viewModel.openLandscapeChart()
                     previewPair = null
                 },
                 onToggleFavorite = { viewModel.toggleFavorite(pair.symbol) },

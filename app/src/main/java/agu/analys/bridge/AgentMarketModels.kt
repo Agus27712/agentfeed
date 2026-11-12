@@ -153,11 +153,95 @@ data class AgentCapabilities(
     val serverTime: Long = System.currentTimeMillis()
 )
 
+@Serializable
+data class AgentCheckpoint(
+    val code: String,
+    val label: String,
+    val isOk: Boolean = false,
+    val metricValue: String = "",
+    val detail: String = ""
+)
+
+@Serializable
+data class AgentScalpingAnalysis(
+    val action: String = "HOLD",
+    val stage: String = "HOLD",
+    val confidence: Int = 0,
+    val setup: String = "",
+    val score: Int = 0,
+    val scoreCategory: String = "",
+    val regime: String = "",
+    val entryPrice: Double = 0.0,
+    val entryZoneLow: Double = 0.0,
+    val entryZoneHigh: Double = 0.0,
+    val tp1: Double = 0.0,
+    val tp2: Double = 0.0,
+    val sl: Double = 0.0,
+    val riskReward: String = "",
+    val checkpoints: List<AgentCheckpoint> = emptyList(),
+    val reasoning: List<String> = emptyList()
+)
+
+@Serializable
+data class AgentIntradayAnalysis(
+    val action: String = "HOLD",
+    val confidence: Int = 0,
+    val setup: String = "",
+    val session: String = "",
+    val targetPrice: Double = 0.0,
+    val stopLoss: Double = 0.0,
+    val riskReward: String = "",
+    val reasoning: List<String> = emptyList()
+)
+
+@Serializable
+data class AgentSwingAnalysis(
+    val action: String = "HOLD",
+    val confidence: Int = 0,
+    val trend: String = "",
+    val regime: String = "",
+    val support: Double = 0.0,
+    val resistance: Double = 0.0,
+    val targetPrice: Double = 0.0,
+    val stopLoss: Double = 0.0,
+    val reasoning: List<String> = emptyList()
+)
+
+@Serializable
+data class AgentTechnicalIndicators(
+    val rsi14: Double? = null,
+    val macd: Double? = null,
+    val macdSignal: Double? = null,
+    val macdHist: Double? = null,
+    val ema20: Double? = null,
+    val ema50: Double? = null,
+    val ema200: Double? = null,
+    val bbUpper: Double? = null,
+    val bbLower: Double? = null,
+    val atr: Double? = null,
+    val rvol: Double? = null,
+    val vwap: Double? = null
+)
+
+@Serializable
+data class AgentEngineAnalysis(
+    val symbol: String,
+    val available: Boolean,
+    val source: String = "ENGINE_EVALUATOR",
+    val price: Double = 0.0,
+    val scalping: AgentScalpingAnalysis? = null,
+    val intraday: AgentIntradayAnalysis? = null,
+    val swing: AgentSwingAnalysis? = null,
+    val indicators: AgentTechnicalIndicators? = null,
+    val overallBias: String = "NEUTRAL",
+    val ts: Long = System.currentTimeMillis(),
+    val error: String? = null
+)
+
 /**
  * Satu panggilan untuk **seluruh** konteks yang dibutuhkan agent sebelum memutuskan
  * trading: harga, candle, kedalaman order book, aturan simbol, biaya, sinyal terakhir,
- * portofolio, dan status kesiapan order. Field boleh `null` bila sumbernya belum ada;
- * `notes` menjelaskan bagian mana yang kosong.
+ * portofolio, analisis engine multi-mode (scalp, intraday, swing), dan status kesiapan order.
  */
 @Serializable
 data class AgentTradingContext(
@@ -172,6 +256,7 @@ data class AgentTradingContext(
     val latestSignal: AgentSignalOutput? = null,
     val portfolio: AgentPortfolioOutput? = null,
     val tradingStatus: AgentTradingStatusResponse? = null,
+    val engineAnalysis: AgentEngineAnalysis? = null,
     val notes: List<String> = emptyList(),
     val type: String = "market_context"
 )

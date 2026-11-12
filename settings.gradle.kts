@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "nadi agentfeed"
+rootProject.name = "omp agentfeed"
 
 include(":app")

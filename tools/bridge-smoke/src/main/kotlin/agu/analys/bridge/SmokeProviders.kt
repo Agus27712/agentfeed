@@ -39,6 +39,8 @@ object AgentMarketDataProvider {
             "GET /api/v1/market/depth?symbol=&limit=",
             "GET /api/v1/market/symbols?quote=&limit=",
             "GET /api/v1/market/context?symbol=&interval=&limit=",
+            "GET /api/v1/engine/analysis?symbol=",
+            "GET /api/v1/market/analysis?symbol=",
             "GET /signals/latest",
             "GET /signals/history?limit=",
             "GET /portfolio"
@@ -135,7 +137,20 @@ object AgentMarketDataProvider {
         latestSignal = AgentOutputBridge.getInstance(ctx).getLatest(),
         portfolio = AgentTradingCommandHandler.buildPortfolioSnapshot(ctx),
         tradingStatus = AgentTradingCommandHandler.getTradingStatus(ctx),
+        engineAnalysis = engineAnalysis(ctx, symbol),
         notes = listOf("SMOKE_FIXTURE: angka di sini bukan data bursa.")
+    )
+
+    suspend fun engineAnalysis(ctx: Context = Context(), symbol: String): AgentEngineAnalysis = AgentEngineAnalysis(
+        symbol = symbol,
+        available = true,
+        source = "SMOKE_FIXTURE",
+        price = 100.0,
+        scalping = AgentScalpingAnalysis(action = "BUY", stage = "ENTRY", confidence = 85, setup = "Breakout Retest"),
+        intraday = AgentIntradayAnalysis(action = "BUY", confidence = 75, setup = "Session High Reclaim"),
+        swing = AgentSwingAnalysis(action = "HOLD", confidence = 60, trend = "Bullish Continuation"),
+        indicators = AgentTechnicalIndicators(rsi14 = 52.5, macd = 0.45, ema20 = 99.2, ema50 = 98.0, ema200 = 95.0),
+        overallBias = "BULLISH_CONFLUENCE"
     )
 }
 

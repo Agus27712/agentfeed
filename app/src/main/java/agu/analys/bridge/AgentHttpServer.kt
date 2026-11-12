@@ -395,6 +395,24 @@ class AgentHttpServer(private val context: Context) {
                     ContentType.Application.Json
                 )
             }
+            get("/api/v1/engine/analysis") {
+                val symbol = call.request.queryParameters["symbol"].orEmpty()
+                call.respondText(
+                    json.encodeToString(
+                        AgentMarketDataProvider.engineAnalysis(context, symbol)
+                    ),
+                    ContentType.Application.Json
+                )
+            }
+            get("/api/v1/market/analysis") {
+                val symbol = call.request.queryParameters["symbol"].orEmpty()
+                call.respondText(
+                    json.encodeToString(
+                        AgentMarketDataProvider.engineAnalysis(context, symbol)
+                    ),
+                    ContentType.Application.Json
+                )
+            }
 
             // --- AGENT-ASSISTED TRADING ENDPOINTS (V3) ---
             route("/api/v1/trading") {

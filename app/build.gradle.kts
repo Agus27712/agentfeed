@@ -67,6 +67,12 @@ android {
     !envStorePassword.isNullOrBlank() && !envKeyAlias.isNullOrBlank() && !envKeyPassword.isNullOrBlank()
 
   signingConfigs {
+    create("debugConfig") {
+      storeFile = file("${rootDir}/debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
     if (hasReleaseKeys) {
       create("release") {
         storeFile = file(envKeystorePath!!)
@@ -80,12 +86,12 @@ android {
     release {
       isMinifyEnabled = true
       isShrinkResources = true
-      signingConfig = signingConfigs.getByName(if (hasReleaseKeys) "release" else "debug")
+      signingConfig = signingConfigs.getByName(if (hasReleaseKeys) "release" else "debugConfig")
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
     debug {
       isMinifyEnabled = false
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
   // lint vital berjalan paralel dengan R8 dan memakan ~2 GiB tambahan. Runner CI

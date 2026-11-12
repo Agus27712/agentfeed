@@ -1604,6 +1604,23 @@ export default function agentfeedBridge(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "get_engine_analysis",
+    label: "Engine multi-strategy analysis",
+    description:
+      "Analisis mendalam dari 3 engine (scalping, intraday, swing) + indikator teknikal komprehensif (RSI, MACD, EMA20/50/200, ATR, RVOL, VWAP, Bollinger Bands) dan konfluensi untuk pair tertentu.",
+    parameters: z.object({
+      symbol: z.string().describe("Pair, contoh: BTCUSDT atau BTCIDR"),
+    }),
+    async execute(_toolCallId, params) {
+      const r = await bridgeGet(
+        `/api/v1/engine/analysis?symbol=${encodeURIComponent(params.symbol)}`,
+        { timeoutMs: 15000 }
+      );
+      return textResult(marketEndpoint(r));
+    },
+  });
+
+  pi.registerTool({
     name: "list_open_orders",
     label: "List open orders",
     description:

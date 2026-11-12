@@ -43,6 +43,7 @@ memanggil ini lebih dulu agar tidak menebak nama endpoint.
 | `GET /api/v1/market/depth?symbol=&limit=` | Bids/asks, spread, imbalance |
 | `GET /api/v1/market/symbols?quote=&limit=` | Daftar simbol + aturan eksekusi |
 | `GET /api/v1/market/context?symbol=&interval=&limit=` | **Seluruh konteks** dalam satu panggilan |
+| `GET /api/v1/engine/analysis?symbol=` | **Analisis 3 engine** (scalp, intraday, swing) + indikator teknikal komprehensif |
 | `GET /signals/latest`, `/signals/history?limit=` | Sinyal engine terakhir |
 | `GET /portfolio` | Snapshot portofolio |
 
@@ -55,12 +56,13 @@ Kuotasi: `USDT` dan `IDR`. Simbol boleh ditulis `BTCUSDT`, `BTC_USDT`, atau
 
 - Setiap snapshot membawa `available` dan `source`. **Baca `available` dulu.**
 - Bila `available=false`, payload memuat `error` dan angka nol **bukan** data.
-- `source` untuk data nyata adalah `TOKOCRYPTO_REST`. Tidak ada angka sintetis.
+- `source` untuk data nyata adalah `TOKOCRYPTO_REST` / `ENGINE_EVALUATOR`. Tidak ada angka sintetis.
 - Fetch dibatasi timeout 9 detik supaya koneksi agent tidak menggantung.
 - `GET /api/v1/market/context` menggabungkan ticker, klines, depth,
   `rules` (tickSize/stepSize/minQty/minNotional), `fees` (maker/taker,
-  slippage, round-trip), sinyal terakhir, portofolio, dan status kesiapan
-  order. Bagian yang belum tersedia bernilai `null` dan dijelaskan di `notes`.
+  slippage, round-trip), sinyal terakhir, portofolio, status kesiapan
+  order, dan `engineAnalysis` (perhitungan scalping, intraday, swing, indikator teknikal).
+  Bagian yang belum tersedia bernilai `null` dan dijelaskan di `notes`.
 
 ## 4. Endpoint tulis (butuh token)
 

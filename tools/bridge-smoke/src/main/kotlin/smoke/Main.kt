@@ -91,6 +91,8 @@ fun main() {
         check(get("/api/v1/market/symbols?quote=USDT&limit=10").contains("\"symbols\""))
         check(get("/api/v1/market/context?symbol=BTCUSDT&interval=1m&limit=60").contains("\"market_context\""))
         check(get("/api/v1/market/context?symbol=BTCUSDT").contains("SMOKE_FIXTURE"))
+        check(get("/api/v1/engine/analysis?symbol=BTCUSDT").contains("SMOKE_FIXTURE"))
+        check(get("/api/v1/engine/analysis?symbol=BTCUSDT").contains("BULLISH_CONFLUENCE"))
 
         // --- Gerbang token fail-closed pada rute /api/v1/trading/* -----------
         check(raw("/api/v1/trading/orders").first == 401) { "GET /orders tanpa token harus 401" }

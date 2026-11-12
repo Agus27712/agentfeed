@@ -154,7 +154,7 @@ enum class TrendSentiment(val displayName: String) {
     EXTREME_OVERSOLD("Pantulan Jenuh Jual (Oversold)")
 }
 
-enum class AppScreen { DASHBOARD, SIMULATION_TRADE, LANDSCAPE_CHART, SETTINGS, LEARNING, PORTFOLIO, SIGNAL_LOGS }
+enum class AppScreen { DASHBOARD, SIMULATION_TRADE, LANDSCAPE_CHART, SETTINGS, LEARNING, PORTFOLIO, SIGNAL_LOGS, COIN_DETAIL }
 
 data class WorthCoinInfo(val pair: TradingPair, val worthScore: Int, val isWorthIt: Boolean, val recommendation: String, val potentialProfitPct: Double, val aiRationale: String)
 data class CoinHoldingStatus(

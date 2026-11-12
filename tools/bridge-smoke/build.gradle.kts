@@ -4,7 +4,7 @@ plugins {
     application
 }
 repositories { mavenCentral() }
-kotlin { jvmToolchain(17) }
+kotlin { jvmToolchain(21) }
 
 // Versi dependensi dibaca dari gradle/libs.versions.toml milik aplikasi, BUKAN ditulis ulang di
 // sini. Duplikasi versi membuat smoke bisa hijau sementara aplikasi memakai kombinasi lain —
